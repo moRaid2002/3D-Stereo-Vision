@@ -28,6 +28,33 @@ http://www.open3d.org/docs/latest/tutorial/Basic/visualization.html
 '''
 
 
+def compute_3d_location(K, R, T, points2D):
+    """
+  K is the camera matrix that includes the focal length and the optical center.
+  R and T are the rotation and translation of the camera.
+  points2D is the 2D point in the camera view.
+  """
+    # Convert the 2D point to homogeneous coordinates
+    points2D = np.array(points2D).reshape(-1, 1)
+    points2D_homogeneous = np.hstack((points2D, np.ones((points2D.shape[0], 1))))
+
+    # Compute the 3D location of the point in the camera view
+    points3D_camera = np.linalg.inv(K) @ points2D_homogeneous
+
+    # Compute the 3D location of the point in the world view
+    points3D_world = np.linalg.inv(R @ T) @ points3D_camera
+
+    return points3D_world
+
+
+def find_AB(pl, pr, R, T):
+    x = np.dot(np.transpose(R), pr)
+    b = (pl[1] * T[2] - T[1]) / (x[1] - x[2] * pl[1])
+    a = b * x[2] + T[2]
+
+    return a, b
+
+
 def findCircles(img, imageNumber):
     img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     img_gray = cv2.equalizeHist(img_gray)
@@ -156,7 +183,7 @@ if __name__ == '__main__':
             z = random.randrange(-w / 2 + 2, w / 2 - 2, step)
         prev_loc.append((x, z))
 
-        GT_cents.append(np.array([x, size, z, 1.]))
+        GT_cents.append(np.array([x, size, z, 1]))
         GT_rads.append(size)
         sph_H = np.array(
             [[1, 0, 0, x],
@@ -221,6 +248,7 @@ if __name__ == '__main__':
          [0, 0, 0, 1]]
     )
     H1_wc = np.matmul(H1_1, H1_0)
+
     render_list = [(H0_wc, 'view0.png', 'depth0.png'),
                    (H1_wc, 'view1.png', 'depth1.png')]
 
@@ -366,7 +394,7 @@ if __name__ == '__main__':
         color = (random.randint(100, 255), random.randint(100, 255), random.randint(100, 255))
         match0 = cv2.circle(img0_copy, (mc[0], mc[1]), 2, color, 3)
         match1 = cv2.circle(img1_copy, (c[0], c[1]), 2, color, 3)
-    print(match)
+
     cv2.imwrite("match0.png", match0)
     cv2.imwrite("match1.png", match1)
 
@@ -377,6 +405,69 @@ if __name__ == '__main__':
     Write your code here
     '''
     ###################################
+    """
+    print(GT_cents)
+
+    coordinates = []
+    for x, y in match:
+        coordinates.append(((x[0] - ox, x[1] - oy, 1), (y[0] - ox, y[1] - oy, 1)))
+
+    points3D = []
+
+    for left, right in coordinates:
+        left3D = np.linalg.inv(K.intrinsic_matrix) @ left
+        right3D = np.linalg.inv(K.intrinsic_matrix) @ right
+        R = H1_wc[:3, :3]
+        T = H1_wc[:3, 3]
+
+
+        a, b = find_AB(left3D, right3D, R, T)
+
+
+
+
+        proj1 = a * np.array(left)
+
+        proj2 = b * np.dot(np.transpose(R), right3D) + T
+
+
+
+
+        P = (proj1 + proj2) / 2
+
+
+
+        points3D.append(P)
+    print(points3D)"""
+    E = np.matmul(np.transpose(K.intrinsic_matrix), np.matmul(fundamental_matrix, K.intrinsic_matrix))
+
+    # Step 3: Decompose the essential matrix to obtain the relative camera pose
+    _, R, t, _ = cv2.recoverPose(E, points1, points2, K.intrinsic_matrix)
+    projection_matrix = np.array([
+        [2 * f / img_width, 0, 0, 0],
+        [0, 2 * f / img_height, 0, 0],
+        [0, 0, -1, 0]
+
+    ])
+    # Step 4: Compute the 3-D location of the sphere centers
+    sphere_centers_3d = []
+    for (circle_center0, circle_center1) in match:
+        # Convert the circle centers to homogeneous coordinates
+        circle_center0_homogeneous = np.array([circle_center0[0], circle_center0[1]])
+        circle_center1_homogeneous = np.array([circle_center1[0], circle_center1[1]])
+
+        # Triangulate the 3-D point using the relative camera pose
+        P0 = np.hstack((np.eye(3), np.zeros((3, 1))))
+        P1 = np.hstack((R, t))
+        sphere_center_3d_homogeneous = cv2.triangulatePoints( projection_matrix,  P1, circle_center0_homogeneous,circle_center1_homogeneous)
+        print(sphere_center_3d_homogeneous)
+        # Convert the 3-D point from homogeneous coordinates to Cartesian coordinates
+        sphere_center_3d_cartesian = sphere_center_3d_homogeneous[:3] / sphere_center_3d_homogeneous[3]
+
+        # Append the 3-D point to the list of sphere centers
+        sphere_centers_3d.append((sphere_center_3d_cartesian[0][0],sphere_center_3d_cartesian[1][0],1))
+    print(sphere_centers_3d)
+
 
     ###################################
     '''
@@ -386,6 +477,16 @@ if __name__ == '__main__':
     '''
     ###################################
 
+    pcd_est_cents = o3d.geometry.PointCloud()
+    pcd_est_cents.points = o3d.utility.Vector3dVector(np.array(sphere_centers_3d)[:, :3])
+    pcd_est_cents.paint_uniform_color([0., 0., 1.])
+    print(np.asarray(pcd_GTcents.points))
+    print(np.asarray(pcd_est_cents.points))
+    # Add the point clouds to the visualization
+
+
+
+    o3d.visualization.draw_geometries([pcd_GTcents, pcd_est_cents])
     ###################################
     '''
     Task 8: 3-D radius of spheres
