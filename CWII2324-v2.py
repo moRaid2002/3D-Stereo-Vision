@@ -61,7 +61,8 @@ def findCircles(img, imageNumber):
     blur = cv2.medianBlur(img_gray, 5)
 
     circles = cv2.HoughCircles(blur, cv2.HOUGH_GRADIENT, dp=1, minDist=10, param1=50, param2=15, minRadius=0,
-                               maxRadius=180)
+                            maxRadius=180)
+
     centers = []
     if circles is not None:
 
@@ -405,8 +406,8 @@ if __name__ == '__main__':
     Write your code here
     '''
     ###################################
-    """
-    print(GT_cents)
+
+
 
     coordinates = []
     for x, y in match:
@@ -438,7 +439,8 @@ if __name__ == '__main__':
 
 
         points3D.append(P)
-    print(points3D)"""
+    print(points3D)
+
     E = np.matmul(np.transpose(K.intrinsic_matrix), np.matmul(fundamental_matrix, K.intrinsic_matrix))
 
     # Step 3: Decompose the essential matrix to obtain the relative camera pose
@@ -457,16 +459,42 @@ if __name__ == '__main__':
         circle_center1_homogeneous = np.array([circle_center1[0], circle_center1[1]])
 
         # Triangulate the 3-D point using the relative camera pose
-        P0 = np.hstack((np.eye(3), np.zeros((3, 1))))
-        P1 = np.hstack((R, t))
-        sphere_center_3d_homogeneous = cv2.triangulatePoints( projection_matrix,  P1, circle_center0_homogeneous,circle_center1_homogeneous)
-        print(sphere_center_3d_homogeneous)
+        P0 = H0_wc[:3]
+        P1 = H1_wc[:3]
+        print(P1)
+        sphere_center_3d_homogeneous = cv2.triangulatePoints( P0,  P1, circle_center0_homogeneous,circle_center1_homogeneous)
+
         # Convert the 3-D point from homogeneous coordinates to Cartesian coordinates
         sphere_center_3d_cartesian = sphere_center_3d_homogeneous[:3] / sphere_center_3d_homogeneous[3]
 
         # Append the 3-D point to the list of sphere centers
-        sphere_centers_3d.append((sphere_center_3d_cartesian[0][0],sphere_center_3d_cartesian[1][0],1))
+        sphere_centers_3d.append((sphere_center_3d_cartesian[0][0], 1,sphere_center_3d_cartesian[1][0]))
     print(sphere_centers_3d)
+
+    k = [[K.intrinsic_matrix[0][0],K.intrinsic_matrix[0][1],K.intrinsic_matrix[0][2],0],
+         [K.intrinsic_matrix[1][0], K.intrinsic_matrix[1][1], K.intrinsic_matrix[1][2], 0],
+         [K.intrinsic_matrix[2][0], K.intrinsic_matrix[2][1], K.intrinsic_matrix[2][2], 0],
+         ]
+
+    p = np.array(k)@H1_wc
+
+    answer = np.array([[k[0][3]-k[2][3]],
+              [k[1][3]-k[2][3]],
+              [p[0][3]-p[2][3]],
+              [p[1][3]-p[2][3]]])
+    sphere_centers_3d = []
+    for (circle_center0, circle_center1) in match:
+        ur= circle_center1[0]
+        vr = circle_center1[1]
+        ul = circle_center0[0]
+        vl = circle_center0[1]
+        matrix = np.array([[ur*k[2][0] - k[0][0],     ur*k[2][1] - k[0][1],        ur*k[2][2] - k[0][2]   ],
+                  [vr*k[2][0] - k[1][0],      vr*k[2][1] - k[1][1],     vr*k[2][2] - k[1][2]],
+                  [ul * p[2][0]-p[0][0],      ul * p[2][1]-p[0][1],        ul * p[2][2]-p[0][2]],
+                  [vl * p[2][0]-p[1][0],      vl * p[2][1]-p[1][1],        vl * p[2][2]-p[1][2]]])
+        point_3D = np.linalg.inv( np.transpose(matrix) @ matrix ) @ np.transpose(matrix) @ answer
+
+        sphere_centers_3d.append((point_3D[0][0], 1, point_3D[2][0]))
 
 
     ###################################
@@ -480,13 +508,24 @@ if __name__ == '__main__':
     pcd_est_cents = o3d.geometry.PointCloud()
     pcd_est_cents.points = o3d.utility.Vector3dVector(np.array(sphere_centers_3d)[:, :3])
     pcd_est_cents.paint_uniform_color([0., 0., 1.])
+    print("--------")
     print(np.asarray(pcd_GTcents.points))
+    print("--------")
     print(np.asarray(pcd_est_cents.points))
+    print("--------")
+    print(np.array(GT_rads))
     # Add the point clouds to the visualization
+    vis = o3d.visualization.Visualizer()
+    vis.create_window(width=640, height=480, left=0, top=0)
+    for m in [obj_meshes[0], pcd_GTcents]:
+
+        vis.add_geometry(m)
+
+    vis.add_geometry( pcd_est_cents)
 
 
-
-    o3d.visualization.draw_geometries([pcd_GTcents, pcd_est_cents])
+    vis.run()
+    vis.destroy_window()
     ###################################
     '''
     Task 8: 3-D radius of spheres
