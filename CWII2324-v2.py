@@ -28,31 +28,60 @@ http://www.open3d.org/docs/latest/tutorial/Basic/visualization.html
 '''
 
 
-def compute_3d_location(K, R, T, points2D):
-    """
-  K is the camera matrix that includes the focal length and the optical center.
-  R and T are the rotation and translation of the camera.
-  points2D is the 2D point in the camera view.
-  """
-    # Convert the 2D point to homogeneous coordinates
-    points2D = np.array(points2D).reshape(-1, 1)
-    points2D_homogeneous = np.hstack((points2D, np.ones((points2D.shape[0], 1))))
+def triangulate_point2(p_left, p_right, M_left, M_right, K):
+    # Convert image points to normalized camera coordinates
+    K_inv = np.linalg.inv(K)
+    p_left_norm = K_inv.dot(np.append(p_left, 1))
+    p_right_norm = K_inv.dot(np.append(p_right, 1))
 
-    # Compute the 3D location of the point in the camera view
-    points3D_camera = np.linalg.inv(K) @ points2D_homogeneous
+    # Construct matrix A for the linear system Ap = 0
+    A = np.array([
+        p_left_norm[0] * M_left[2, :] - M_left[0, :],
+        p_left_norm[1] * M_left[2, :] - M_left[1, :],
+        p_right_norm[0] * M_right[2, :] - M_right[0, :],
+        p_right_norm[1] * M_right[2, :] - M_right[1, :]
+    ])
 
-    # Compute the 3D location of the point in the world view
-    points3D_world = np.linalg.inv(R @ T) @ points3D_camera
+    # Solve for P using SVD
+    U, S, Vt = np.linalg.svd(A)
+    P = Vt[-1]
+    P = P / P[3]  # Convert to homogeneous coordinates
 
-    return points3D_world
+    return P[:3]
 
 
-def find_AB(pl, pr, R, T):
-    x = np.dot(np.transpose(R), pr)
-    b = (pl[1] * T[2] - T[1]) / (x[1] - x[2] * pl[1])
-    a = b * x[2] + T[2]
+def skew_symmetric(v):
+    return np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
 
-    return a, b
+
+def compute_fundamental_matrix(M_left, M_right, K):
+    # Compute Left-to-Right Camera Transformation
+    M_left_to_right = np.dot(M_right, np.linalg.inv(M_left))
+
+    # Extract R and T from the Left-to-Right Camera Transformation
+    R = M_left_to_right[:3, :3]
+    T = M_left_to_right[:3, 3]
+
+    # Compute Essential Matrix
+    T_skew = skew_symmetric(T)
+    E = np.dot(T_skew, R)
+
+    # Compute Fundamental Matrix
+    K_inv = np.linalg.inv(K)
+    F = np.dot(np.dot(K_inv.T, E), K_inv)
+
+    return F, R, T
+
+
+def remove_duplicates_with_higher_distance(points_list):
+    best_entries = {}
+
+    for c, mc, d in points_list:
+        if c not in best_entries or d < best_entries[c][1]:
+            best_entries[c] = (mc, d)
+
+    cleaned_list = [(c, mc, d) for c, (mc, d) in best_entries.items()]
+    return cleaned_list
 
 
 def findCircles(img, imageNumber):
@@ -60,8 +89,8 @@ def findCircles(img, imageNumber):
     img_gray = cv2.equalizeHist(img_gray)
     blur = cv2.medianBlur(img_gray, 5)
 
-    circles = cv2.HoughCircles(blur, cv2.HOUGH_GRADIENT, dp=1, minDist=10, param1=50, param2=15, minRadius=0,
-                            maxRadius=180)
+    circles = cv2.HoughCircles(blur, cv2.HOUGH_GRADIENT, dp=1, minDist=10, param1=50, param2=20, minRadius=10,
+                               maxRadius=100)
 
     centers = []
     if circles is not None:
@@ -329,29 +358,23 @@ if __name__ == '__main__':
     Write your code here
     '''
     ###################################
-    # Step 2: Extract features/keypoints from both images
-    # Use any feature detection algorithm of your choice
-    # For example, using ORB feature detector
-    orb = cv2.ORB_create()
-    keypoints1, descriptors1 = orb.detectAndCompute(img0, None)
-    keypoints2, descriptors2 = orb.detectAndCompute(img1, None)
 
-    # Step 3: Compute the fundamental matrix
-    # Use the keypoints and descriptors from step 2
-    matcher = cv2.BFMatcher(cv2.NORM_HAMMING)
-    matches = matcher.match(descriptors1, descriptors2)
-    points1 = np.float32([keypoints1[m.queryIdx].pt for m in matches]).reshape(-1, 1, 2)
-    points2 = np.float32([keypoints2[m.trainIdx].pt for m in matches]).reshape(-1, 1, 2)
-    fundamental_matrix, _ = cv2.findFundamentalMat(points1, points2, cv2.FM_RANSAC)
+    F, R, T = compute_fundamental_matrix(H0_wc, H1_wc, K.intrinsic_matrix)
 
     epipolarLines = []
-
+    epipolarLinesR = []
     for point in circles_center0:
         homogeneous_point = np.array([point[0], point[1], 1])
-        epipolar_line = np.dot(fundamental_matrix, homogeneous_point)
+        homogeneous_pointR = np.array([point[0] , point[1]- point[2], 1])
+
+        epipolar_line = np.dot(F, homogeneous_point)
+        epipolar_lineR = np.dot(F, homogeneous_pointR)
 
         epipolar_line_homogeneous = np.array([epipolar_line[0], epipolar_line[1], epipolar_line[2]])
+        epipolar_line_homogeneousR = np.array([epipolar_lineR[0], epipolar_lineR[1], epipolar_lineR[2]])
+
         epipolar_line_homogeneous /= np.linalg.norm(epipolar_line_homogeneous)
+        epipolar_line_homogeneousR /= np.linalg.norm(epipolar_line_homogeneousR)
 
         a, b, c = epipolar_line_homogeneous
         x0, x1 = 0, img1.shape[1] - 1
@@ -359,10 +382,22 @@ if __name__ == '__main__':
         y1 = int((-c - a * x1) / b)
         epipolarLines.append((a, b, c, point))
 
-        epipolar_line_image = cv2.line(img1, (x0, y0), (x1, y1), (0, 255, 0), 2)
+        epipolar_line_image = cv2.line(img1, (x0, y0), (x1, y1), (255, 0, 0), 2)
+
+        a, b, c = epipolar_line_homogeneousR
+        x0, x1 = 0, img1.shape[1] - 1
+        y0 = int((-c - a * x0) / b)
+        y1 = int((-c - a * x1) / b)
+        epipolarLinesR.append((a, b, c, point))
+
+        epipolar_line_image = cv2.line(img1, (x0, y0), (x1, y1), (0, 0, 255), 2)
+        new = cv2.circle(img0, (point[0], point[1] - point[2]), 1, (0, 0, 0), 2)
 
     # Step 7: Display the updated second image with the drawn epipolar line
     cv2.imshow('Epipolar Line Image', epipolar_line_image)
+    cv2.imwrite("lines.png", epipolar_line_image)
+    cv2.imwrite("r.png", new)
+
     cv2.waitKey(0)
     cv2.destroyAllWindows()
 
@@ -389,12 +424,19 @@ if __name__ == '__main__':
             if d < mind:
                 mind = d
                 matchCircle = c
-        match.append((circle, matchCircle))
 
-    for c, mc in match:
-        color = (random.randint(100, 255), random.randint(100, 255), random.randint(100, 255))
-        match0 = cv2.circle(img0_copy, (mc[0], mc[1]), 2, color, 3)
-        match1 = cv2.circle(img1_copy, (c[0], c[1]), 2, color, 3)
+        if mind < 0.25:
+            match.append((matchCircle, circle, mind))
+
+    match = remove_duplicates_with_higher_distance(match)
+    colors = [(0, 255, 0), (255, 0, 0), (0, 0, 255), (0, 0, 0), (255, 255, 255), (0, 128, 255)]
+    i = 0
+    for c, mc, d in match:
+        if i < 6:
+            color = colors[i]
+            i = i + 1
+            match1 = cv2.circle(img1_copy, (mc[0], mc[1]), 2, color, 3)
+            match0 = cv2.circle(img0_copy, (c[0], c[1]), 2, color, 3)
 
     cv2.imwrite("match0.png", match0)
     cv2.imwrite("match1.png", match1)
@@ -406,96 +448,14 @@ if __name__ == '__main__':
     Write your code here
     '''
     ###################################
+    # Implement Task 6
+    spheres_3D_world = []
 
-
-
-    coordinates = []
-    for x, y in match:
-        coordinates.append(((x[0] - ox, x[1] - oy, 1), (y[0] - ox, y[1] - oy, 1)))
-
-    points3D = []
-
-    for left, right in coordinates:
-        left3D = np.linalg.inv(K.intrinsic_matrix) @ left
-        right3D = np.linalg.inv(K.intrinsic_matrix) @ right
-        R = H1_wc[:3, :3]
-        T = H1_wc[:3, 3]
-
-
-        a, b = find_AB(left3D, right3D, R, T)
-
-
-
-
-        proj1 = a * np.array(left)
-
-        proj2 = b * np.dot(np.transpose(R), right3D) + T
-
-
-
-
-        P = (proj1 + proj2) / 2
-
-
-
-        points3D.append(P)
-    print(points3D)
-
-    E = np.matmul(np.transpose(K.intrinsic_matrix), np.matmul(fundamental_matrix, K.intrinsic_matrix))
-
-    # Step 3: Decompose the essential matrix to obtain the relative camera pose
-    _, R, t, _ = cv2.recoverPose(E, points1, points2, K.intrinsic_matrix)
-    projection_matrix = np.array([
-        [2 * f / img_width, 0, 0, 0],
-        [0, 2 * f / img_height, 0, 0],
-        [0, 0, -1, 0]
-
-    ])
-    # Step 4: Compute the 3-D location of the sphere centers
-    sphere_centers_3d = []
-    for (circle_center0, circle_center1) in match:
-        # Convert the circle centers to homogeneous coordinates
-        circle_center0_homogeneous = np.array([circle_center0[0], circle_center0[1]])
-        circle_center1_homogeneous = np.array([circle_center1[0], circle_center1[1]])
-
-        # Triangulate the 3-D point using the relative camera pose
-        P0 = H0_wc[:3]
-        P1 = H1_wc[:3]
-        print(P1)
-        sphere_center_3d_homogeneous = cv2.triangulatePoints( P0,  P1, circle_center0_homogeneous,circle_center1_homogeneous)
-
-        # Convert the 3-D point from homogeneous coordinates to Cartesian coordinates
-        sphere_center_3d_cartesian = sphere_center_3d_homogeneous[:3] / sphere_center_3d_homogeneous[3]
-
-        # Append the 3-D point to the list of sphere centers
-        sphere_centers_3d.append((sphere_center_3d_cartesian[0][0], 1,sphere_center_3d_cartesian[1][0]))
-    print(sphere_centers_3d)
-
-    k = [[K.intrinsic_matrix[0][0],K.intrinsic_matrix[0][1],K.intrinsic_matrix[0][2],0],
-         [K.intrinsic_matrix[1][0], K.intrinsic_matrix[1][1], K.intrinsic_matrix[1][2], 0],
-         [K.intrinsic_matrix[2][0], K.intrinsic_matrix[2][1], K.intrinsic_matrix[2][2], 0],
-         ]
-
-    p = np.array(k)@H1_wc
-
-    answer = np.array([[k[0][3]-k[2][3]],
-              [k[1][3]-k[2][3]],
-              [p[0][3]-p[2][3]],
-              [p[1][3]-p[2][3]]])
-    sphere_centers_3d = []
-    for (circle_center0, circle_center1) in match:
-        ur= circle_center1[0]
-        vr = circle_center1[1]
-        ul = circle_center0[0]
-        vl = circle_center0[1]
-        matrix = np.array([[ur*k[2][0] - k[0][0],     ur*k[2][1] - k[0][1],        ur*k[2][2] - k[0][2]   ],
-                  [vr*k[2][0] - k[1][0],      vr*k[2][1] - k[1][1],     vr*k[2][2] - k[1][2]],
-                  [ul * p[2][0]-p[0][0],      ul * p[2][1]-p[0][1],        ul * p[2][2]-p[0][2]],
-                  [vl * p[2][0]-p[1][0],      vl * p[2][1]-p[1][1],        vl * p[2][2]-p[1][2]]])
-        point_3D = np.linalg.inv( np.transpose(matrix) @ matrix ) @ np.transpose(matrix) @ answer
-
-        sphere_centers_3d.append((point_3D[0][0], 1, point_3D[2][0]))
-
+    for lc, rc, _ in match:
+        P = triangulate_point2(np.array([lc[0], lc[1]]), np.array([rc[0], rc[1]]), H0_wc, H1_wc, K.intrinsic_matrix)
+        print(P)
+        if -12 * 1.2 <= P[0] <= 12 * 1.2 and 1 * 0.8 <= P[1] <= 1.6 * 1.2 and -6 * 1.2 <= P[2] <= 6 * 1.2:
+            spheres_3D_world.append(P)
 
     ###################################
     '''
@@ -506,23 +466,20 @@ if __name__ == '__main__':
     ###################################
 
     pcd_est_cents = o3d.geometry.PointCloud()
-    pcd_est_cents.points = o3d.utility.Vector3dVector(np.array(sphere_centers_3d)[:, :3])
+    pcd_est_cents.points = o3d.utility.Vector3dVector(np.array(spheres_3D_world)[:, :3])
     pcd_est_cents.paint_uniform_color([0., 0., 1.])
+    # Add the point clouds to the visualization
+    vis = o3d.visualization.Visualizer()
     print("--------")
     print(np.asarray(pcd_GTcents.points))
     print("--------")
     print(np.asarray(pcd_est_cents.points))
     print("--------")
-    print(np.array(GT_rads))
-    # Add the point clouds to the visualization
-    vis = o3d.visualization.Visualizer()
     vis.create_window(width=640, height=480, left=0, top=0)
     for m in [obj_meshes[0], pcd_GTcents]:
-
         vis.add_geometry(m)
 
-    vis.add_geometry( pcd_est_cents)
-
+    vis.add_geometry(pcd_est_cents)
 
     vis.run()
     vis.destroy_window()
