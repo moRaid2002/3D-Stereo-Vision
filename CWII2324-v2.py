@@ -388,7 +388,7 @@ if __name__ == '__main__':
         x0, x1 = 0, img1.shape[1] - 1
         y0 = int((-c - a * x0) / b)
         y1 = int((-c - a * x1) / b)
-        epipolarLinesR.append((a, b, c, point))
+        epipolarLinesR.append((a, b, c, (point[0], point[1] - point[2])))
 
         epipolar_line_image = cv2.line(img1, (x0, y0), (x1, y1), (0, 0, 255), 2)
         new = cv2.circle(img0, (point[0], point[1] - point[2]), 1, (0, 0, 0), 2)
@@ -409,9 +409,22 @@ if __name__ == '__main__':
     '''
     ###################################
     match = []
+    matchR = []
     lines = len(epipolarLines)
+    linesR = len(epipolarLinesR)
     for circle in circles_center1:
         distances = []
+        for theta in range(0,360):
+            xr = circle[0] + circle[2]* np.cos(np.radians(theta))
+            yr = circle[0] + circle[2] * np.sin(np.radians(theta))
+            for n in range(linesR) :
+                distance = abs(xr * epipolarLinesR[n][0] + yr * epipolarLinesR[n][1] + epipolarLinesR[n][2])
+
+
+
+
+
+
         for n in range(lines):
             first_circle = epipolarLines[n][3]
 
