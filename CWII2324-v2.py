@@ -89,7 +89,7 @@ def findCircles(img, imageNumber):
     img_gray = cv2.equalizeHist(img_gray)
     blur = cv2.medianBlur(img_gray, 5)
 
-    circles = cv2.HoughCircles(blur, cv2.HOUGH_GRADIENT, dp=1, minDist=10, param1=50, param2=20, minRadius=10,
+    circles = cv2.HoughCircles(blur, cv2.HOUGH_GRADIENT, dp=1, minDist=15, param1=50, param2=17, minRadius=10,
                                maxRadius=100)
 
     centers = []
@@ -365,7 +365,7 @@ if __name__ == '__main__':
     epipolarLinesR = []
     for point in circles_center0:
         homogeneous_point = np.array([point[0], point[1], 1])
-        homogeneous_pointR = np.array([point[0] , point[1]- point[2], 1])
+        homogeneous_pointR = np.array([point[0], point[1] - point[2], 1])
 
         epipolar_line = np.dot(F, homogeneous_point)
         epipolar_lineR = np.dot(F, homogeneous_pointR)
@@ -388,7 +388,7 @@ if __name__ == '__main__':
         x0, x1 = 0, img1.shape[1] - 1
         y0 = int((-c - a * x0) / b)
         y1 = int((-c - a * x1) / b)
-        epipolarLinesR.append((a, b, c, (point[0], point[1] - point[2])))
+        epipolarLinesR.append((a, b, c, point))
 
         epipolar_line_image = cv2.line(img1, (x0, y0), (x1, y1), (0, 0, 255), 2)
         new = cv2.circle(img0, (point[0], point[1] - point[2]), 1, (0, 0, 0), 2)
@@ -409,22 +409,9 @@ if __name__ == '__main__':
     '''
     ###################################
     match = []
-    matchR = []
     lines = len(epipolarLines)
-    linesR = len(epipolarLinesR)
     for circle in circles_center1:
         distances = []
-        for theta in range(0,360):
-            xr = circle[0] + circle[2]* np.cos(np.radians(theta))
-            yr = circle[0] + circle[2] * np.sin(np.radians(theta))
-            for n in range(linesR) :
-                distance = abs(xr * epipolarLinesR[n][0] + yr * epipolarLinesR[n][1] + epipolarLinesR[n][2])
-
-
-
-
-
-
         for n in range(lines):
             first_circle = epipolarLines[n][3]
 
@@ -454,6 +441,31 @@ if __name__ == '__main__':
     cv2.imwrite("match0.png", match0)
     cv2.imwrite("match1.png", match1)
 
+    matchR = []
+    for a, b, c, point in epipolarLinesR:
+
+        matchedpoint = point
+        for lc, rc, d in match:
+            if lc == point:
+                matchedpoint = rc
+        distances = []
+        for theta in range(0, 360):
+            x0 = matchedpoint[0] + matchedpoint[2] * np.cos(np.radians(theta))
+            y0 = matchedpoint[1] + matchedpoint[2] * np.sin(np.radians(theta))
+            possible_R = (x0, y0)
+            dis = abs(a * x0 + b * y0 + c) / (a ** 2 + b ** 2) ** 0.5
+            distances.append((possible_R, dis))
+        mind = sys.maxsize
+        bestpoint = matchedpoint
+
+        for pR, dR in distances:
+
+            if dR < mind:
+                mind = dR
+                bestpoint = pR
+
+        matchR.append(((point[0], point[1] - point[2]), bestpoint))
+
     ###################################
     '''
     Task 6: 3-D locations of sphere centres
@@ -466,7 +478,7 @@ if __name__ == '__main__':
 
     for lc, rc, _ in match:
         P = triangulate_point2(np.array([lc[0], lc[1]]), np.array([rc[0], rc[1]]), H0_wc, H1_wc, K.intrinsic_matrix)
-        print(P)
+
         if -12 * 1.2 <= P[0] <= 12 * 1.2 and 1 * 0.8 <= P[1] <= 1.6 * 1.2 and -6 * 1.2 <= P[2] <= 6 * 1.2:
             spheres_3D_world.append(P)
 
@@ -481,13 +493,10 @@ if __name__ == '__main__':
     pcd_est_cents = o3d.geometry.PointCloud()
     pcd_est_cents.points = o3d.utility.Vector3dVector(np.array(spheres_3D_world)[:, :3])
     pcd_est_cents.paint_uniform_color([0., 0., 1.])
+
     # Add the point clouds to the visualization
     vis = o3d.visualization.Visualizer()
-    print("--------")
-    print(np.asarray(pcd_GTcents.points))
-    print("--------")
-    print(np.asarray(pcd_est_cents.points))
-    print("--------")
+
     vis.create_window(width=640, height=480, left=0, top=0)
     for m in [obj_meshes[0], pcd_GTcents]:
         vis.add_geometry(m)
@@ -503,6 +512,14 @@ if __name__ == '__main__':
     Write your code here
     '''
     ###################################
+    radius_3D_world = []
+
+    for lr, rr in matchR:
+        P = triangulate_point2(np.array([lr[0], lr[1]]), np.array([rr[0], rr[1]]), H0_wc, H1_wc, K.intrinsic_matrix)
+
+        if -12 * 2 <= P[0] <= 12 * 2 and 1 * 0.25 <= P[1] <= 1.6 * 2 and -6 * 2 <= P[2] <= 6 * 2:
+            radius_3D_world.append(P)
+    print(np.asarray(radius_3D_world))
 
     ###################################
     '''
@@ -511,6 +528,35 @@ if __name__ == '__main__':
     Write your code here:
     '''
     ###################################
+    vis = o3d.visualization.Visualizer()
+
+    vis.create_window(width=640, height=480, left=0, top=0)
+    vis.add_geometry(obj_meshes[0])
+    for cen in np.asarray(pcd_GTcents.points):
+        sphere = o3d.geometry.TriangleMesh.create_sphere(radius=cen[1])
+        sphere.translate(cen)
+        sphere.paint_uniform_color([0., 0., 0.])
+        vis.add_geometry(sphere)
+
+    for c3D in spheres_3D_world:
+        for r3D in radius_3D_world:
+            # Create a sphere geometry at the origin
+            radius = np.linalg.norm(c3D - r3D)
+            if 1 * 0.5 <= radius <= 1.6 * 1.5:
+                sphere = o3d.geometry.TriangleMesh.create_sphere(radius=radius)
+                sphere.translate(c3D)
+                sphere_cloud = sphere.sample_points_poisson_disk(number_of_points=1000)
+
+                colors = np.asarray(sphere_cloud.colors)
+                red_color = [1, 0, 0]  # Red color
+                colors = np.tile(red_color, (colors.shape[0], 1))
+
+                # Update the colors of the point cloud
+                sphere_cloud.colors = o3d.utility.Vector3dVector(colors)
+                vis.add_geometry(sphere_cloud)
+
+    vis.run()
+    vis.destroy_window()
 
     ###################################
     '''
