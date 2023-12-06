@@ -489,10 +489,30 @@ if __name__ == '__main__':
     Write your code here
     '''
     ###################################
+    errors = []
+    for c in spheres_3D_world:
+        maxd = sys.maxsize
+        p = c
+        for gt in np.asarray(pcd_GTcents.points):
+            d = np.linalg.norm(c - gt)
+            if d < maxd:
+                maxd = d
+                p = gt
+        errors.append((c,p,maxd))
+    index = 1
+    for est_c , c , e in errors:
+        print("-------------------------SPHERE "+str(index)+"--------------------------------")
+        print("the ground truth coordinates of the sphere center is: " + str(c) + " \nthe estimated center : " + str(est_c)+ " \nwith an error of: " + str(e))
+        index +=1
 
+    print("-----------------------------------------------------------------")
+    average = sum(e for a, b, e in errors)/ len(errors)
+    print("Average error  across all spheres is:  " + str(average))
+    print("-----------------------------------------------------------------")
     pcd_est_cents = o3d.geometry.PointCloud()
     pcd_est_cents.points = o3d.utility.Vector3dVector(np.array(spheres_3D_world)[:, :3])
     pcd_est_cents.paint_uniform_color([0., 0., 1.])
+
 
     # Add the point clouds to the visualization
     vis = o3d.visualization.Visualizer()
@@ -519,7 +539,7 @@ if __name__ == '__main__':
 
         if -12 * 2 <= P[0] <= 12 * 2 and 1 * 0.25 <= P[1] <= 1.6 * 2 and -6 * 2 <= P[2] <= 6 * 2:
             radius_3D_world.append(P)
-    print(np.asarray(radius_3D_world))
+
 
     ###################################
     '''
